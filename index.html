@@ -1,0 +1,244 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<title>Snake Battle</title>
+<!-- AD STEP 1 (website): after Google AdSense approves your site, paste your AdSense <script> here. -->
+<style>
+  :root{ --bg:#1b1f3b; --board:#e9efe3; --grid:#d6dfcd; --me:#1d4ed8; --ai:#e4572e; --food:#f2b705; --ink:#f4f1fa; }
+  *{ box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
+  html,body{ margin:0; height:100%; background:var(--bg); color:var(--ink);
+    font-family:"Trebuchet MS",Verdana,sans-serif; touch-action:none; overflow:hidden; }
+  body{ display:flex; flex-direction:column; align-items:center; padding:8px;
+    padding-top:max(8px, env(safe-area-inset-top)); padding-bottom:max(8px, env(safe-area-inset-bottom)); }
+  .ad{ width:100%; max-width:420px; min-height:50px; border:1px dashed #5b6199; border-radius:6px;
+    display:flex; align-items:center; justify-content:center; font-size:12px; color:#9aa0d6; margin:4px 0; }
+  header{ width:100%; max-width:420px; display:flex; justify-content:space-between; align-items:baseline; margin:4px 0; }
+  h1{ font-size:22px; margin:0; letter-spacing:.5px; }
+  .stats{ font-size:14px; }
+  .stats b{ font-size:18px; }
+  .wrap{ position:relative; width:min(94vw, 420px, 52vh); aspect-ratio:1; }
+  canvas{ width:100%; height:100%; border-radius:8px; background:var(--board); display:block; }
+  .overlay{ position:absolute; inset:0; background:rgba(27,31,59,.92); border-radius:8px; display:flex;
+    flex-direction:column; align-items:center; justify-content:center; gap:10px; text-align:center; padding:16px; }
+  .overlay.hide{ display:none; }
+  .overlay h2{ margin:0; font-size:26px; }
+  .overlay p{ margin:0; font-size:14px; color:#c9cdf0; max-width:280px; line-height:1.4; }
+  button{ font:inherit; font-weight:bold; border:0; border-radius:10px; padding:11px 22px; cursor:pointer;
+    background:var(--food); color:#2a2100; }
+  button.alt{ background:transparent; color:var(--ink); border:2px solid #5b6199; }
+  button:focus-visible{ outline:3px solid #fff; outline-offset:2px; }
+  .pad{ display:grid; grid-template-columns:repeat(3,64px); grid-template-rows:repeat(2,52px); gap:6px; margin-top:10px; }
+  .pad button{ padding:0; background:#2c3263; color:var(--ink); font-size:22px; }
+  .pad .up{ grid-column:2; grid-row:1; } .pad .left{ grid-column:1; grid-row:2; }
+  .pad .down{ grid-column:2; grid-row:2; } .pad .right{ grid-column:3; grid-row:2; }
+</style>
+</head>
+<body>
+
+<!-- AD SLOT A: banner. Replace the text with your AdSense/AdMob banner code. -->
+<div class="ad" id="adBanner">Ad space (banner)</div>
+
+<header>
+  <h1>Snake Battle</h1>
+  <div class="stats">Score <b id="score">0</b> &nbsp; Lives <b id="lives">3</b> &nbsp; Best <b id="best">0</b></div>
+</header>
+
+<div class="wrap">
+  <canvas id="c" width="400" height="400"></canvas>
+
+  <div class="overlay" id="menu">
+    <h2>Snake Battle</h2>
+    <p>You are the blue snake. Eat gold food to grow. Crash the orange snake into a wall or into you for +5 points. You have 3 lives.</p>
+    <button id="startBtn">Play</button>
+    <p>Arrow keys, WASD, swipe, or the buttons below.</p>
+  </div>
+
+  <div class="overlay hide" id="over">
+    <h2>Game over</h2>
+    <p id="overMsg"></p>
+    <!-- AD SLOT B: shown between games. Replace the text with your interstitial/native ad. -->
+    <div class="ad" id="adOver">Ad space (between games)</div>
+    <button id="extraBtn">Watch an ad for +1 life</button>
+    <button class="alt" id="againBtn">Play again</button>
+  </div>
+</div>
+
+<div class="pad">
+  <button class="up" data-d="U" aria-label="Up">&#9650;</button>
+  <button class="left" data-d="L" aria-label="Left">&#9664;</button>
+  <button class="down" data-d="D" aria-label="Down">&#9660;</button>
+  <button class="right" data-d="R" aria-label="Right">&#9654;</button>
+</div>
+
+<script>
+const N = 20, CELL = 20;
+const cv = document.getElementById('c'), ctx = cv.getContext('2d');
+const $ = id => document.getElementById(id);
+const DIRS = { U:{x:0,y:-1}, D:{x:0,y:1}, L:{x:-1,y:0}, R:{x:1,y:0} };
+
+let me, ai, food, score, lives, best = 0, nextDir, playing = false, timer = null, usedExtra = false;
+try { best = +localStorage.getItem('snakeBattleBest') || 0; } catch (e) {}
+$('best').textContent = best;
+
+/* ---------- helpers ---------- */
+const same = (a, b) => a.x === b.x && a.y === b.y;
+const add = (a, d) => ({ x: a.x + d.x, y: a.y + d.y });
+const outside = p => p.x < 0 || p.y < 0 || p.x >= N || p.y >= N;
+const onSnake = (p, s) => s.body.some(b => same(b, p));
+
+function makeSnake(x, y, dir) {
+  const body = [];
+  for (let i = 0; i < 3; i++) body.push({ x: x - dir.x * i, y: y - dir.y * i });
+  return { body, dir };
+}
+function newMe() { return makeSnake(4, 10, DIRS.R); }
+function newAi() {
+  for (let t = 0; t < 30; t++) {
+    const s = makeSnake(15, 2 + Math.floor(Math.random() * 16), DIRS.L);
+    if (!s.body.some(p => onSnake(p, me))) return s;
+  }
+  return makeSnake(15, 3, DIRS.L);
+}
+function placeFood() {
+  do { food = { x: Math.floor(Math.random() * N), y: Math.floor(Math.random() * N) }; }
+  while (onSnake(food, me) || onSnake(food, ai));
+}
+
+/* ---------- enemy brain: head toward food, avoid crashing ---------- */
+function aiPick() {
+  const head = ai.body[0];
+  let best = null, bestDist = 1e9;
+  for (const k in DIRS) {
+    const d = DIRS[k];
+    if (d.x === -ai.dir.x && d.y === -ai.dir.y) continue;      // no U-turn
+    const p = add(head, d);
+    if (outside(p) || onSnake(p, ai) || onSnake(p, me)) continue; // unsafe
+    const dist = Math.abs(p.x - food.x) + Math.abs(p.y - food.y) + Math.random() * 0.6;
+    if (dist < bestDist) { bestDist = dist; best = d; }
+  }
+  return best || ai.dir; // trapped: keep going
+}
+
+/* ---------- game loop ---------- */
+function step() {
+  me.dir = nextDir;
+  ai.dir = aiPick();
+  const h1 = add(me.body[0], me.dir), h2 = add(ai.body[0], ai.dir);
+  const eat1 = same(h1, food), eat2 = same(h2, food);
+  if (!eat1) me.body.pop();
+  if (!eat2) ai.body.pop();
+
+  const headOn = same(h1, h2);
+  const dead1 = headOn || outside(h1) || onSnake(h1, me) || onSnake(h1, ai);
+  const dead2 = headOn || outside(h2) || onSnake(h2, ai) || onSnake(h2, me);
+
+  me.body.unshift(h1);
+  ai.body.unshift(h2);
+  if (eat1 && !dead1) score++;
+  if (eat1 || eat2) placeFood();
+
+  if (dead2) { score += 5; ai = newAi(); }
+  if (dead1) {
+    lives--;
+    if (lives <= 0) { draw(); return endGame(); }
+    me = newMe(); nextDir = DIRS.R;
+  }
+  updateHud();
+  draw();
+  schedule();
+}
+function schedule() {
+  const delay = Math.max(70, 140 - score * 1.5); // gets faster as you score
+  timer = setTimeout(step, delay);
+}
+
+/* ---------- drawing ---------- */
+function draw() {
+  ctx.clearRect(0, 0, 400, 400);
+  ctx.fillStyle = '#d6dfcd';
+  for (let x = 0; x < N; x++) for (let y = 0; y < N; y++)
+    if ((x + y) % 2) ctx.fillRect(x * CELL, y * CELL, CELL, CELL);
+  ctx.fillStyle = '#f2b705';
+  ctx.beginPath(); ctx.arc(food.x * CELL + 10, food.y * CELL + 10, 7, 0, 7); ctx.fill();
+  drawSnake(ai, '#e4572e');
+  drawSnake(me, '#1d4ed8');
+}
+function drawSnake(s, color) {
+  ctx.fillStyle = color;
+  s.body.forEach((p, i) => {
+    ctx.globalAlpha = i === 0 ? 1 : 0.82;
+    ctx.fillRect(p.x * CELL + 1, p.y * CELL + 1, CELL - 2, CELL - 2);
+  });
+  ctx.globalAlpha = 1;
+  const h = s.body[0];
+  ctx.fillStyle = '#fff';
+  ctx.fillRect(h.x * CELL + 5, h.y * CELL + 5, 4, 4);
+  ctx.fillRect(h.x * CELL + 11, h.y * CELL + 5, 4, 4);
+}
+function updateHud() { $('score').textContent = score; $('lives').textContent = lives; $('best').textContent = best; }
+
+/* ---------- flow ---------- */
+function startGame() {
+  clearTimeout(timer);
+  score = 0; lives = 3; usedExtra = false;
+  me = newMe(); nextDir = DIRS.R; ai = newAi(); placeFood();
+  $('menu').classList.add('hide'); $('over').classList.add('hide');
+  $('extraBtn').style.display = '';
+  playing = true; updateHud(); draw(); schedule();
+}
+function endGame() {
+  playing = false;
+  if (score > best) { best = score; try { localStorage.setItem('snakeBattleBest', best); } catch (e) {} }
+  updateHud();
+  $('overMsg').textContent = 'You scored ' + score + '. Best: ' + best + '.';
+  if (usedExtra) $('extraBtn').style.display = 'none';
+  $('over').classList.remove('hide');
+  showInterstitialAd(); // AD HOOK
+}
+
+/* ---------- ADS: replace these two functions with real ad code ---------- */
+function showInterstitialAd() {
+  // Website: the "adOver" box above is your ad slot (paste AdSense <ins> code there).
+  // Android: call your AdMob interstitial here (see README.md, step 5).
+}
+function showRewardedAd(onReward) {
+  // Placeholder: pretends the ad took 2 seconds, then gives the reward.
+  // Replace with AdMob rewarded ad on Android (see README.md).
+  const b = $('extraBtn'); b.disabled = true; b.textContent = 'Playing ad...';
+  setTimeout(() => { b.disabled = false; b.textContent = 'Watch an ad for +1 life'; onReward(); }, 2000);
+}
+
+$('startBtn').onclick = startGame;
+$('againBtn').onclick = startGame;
+$('extraBtn').onclick = () => showRewardedAd(() => {
+  usedExtra = true; lives = 1;
+  me = newMe(); nextDir = DIRS.R; ai = newAi();
+  $('over').classList.add('hide'); playing = true; updateHud(); draw(); schedule();
+});
+
+/* ---------- controls ---------- */
+function turn(k) {
+  if (!playing) return;
+  const d = DIRS[k];
+  if (d.x === -me.dir.x && d.y === -me.dir.y) return; // no reversing
+  nextDir = d;
+}
+const KEYS = { ArrowUp:'U', ArrowDown:'D', ArrowLeft:'L', ArrowRight:'R', w:'U', s:'D', a:'L', d:'R' };
+addEventListener('keydown', e => { if (KEYS[e.key]) { e.preventDefault(); turn(KEYS[e.key]); } });
+document.querySelectorAll('.pad button').forEach(b => b.addEventListener('pointerdown', e => { e.preventDefault(); turn(b.dataset.d); }));
+let sx, sy;
+cv.addEventListener('touchstart', e => { sx = e.touches[0].clientX; sy = e.touches[0].clientY; });
+cv.addEventListener('touchmove', e => {
+  if (sx == null) return;
+  const dx = e.touches[0].clientX - sx, dy = e.touches[0].clientY - sy;
+  if (Math.max(Math.abs(dx), Math.abs(dy)) < 24) return;
+  turn(Math.abs(dx) > Math.abs(dy) ? (dx > 0 ? 'R' : 'L') : (dy > 0 ? 'D' : 'U'));
+  sx = sy = null;
+});
+
+me = newMe(); ai = newAi(); placeFood(); score = 0; lives = 3; draw();
+</script>
+</body>
+</html>
